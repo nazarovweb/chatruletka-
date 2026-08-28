@@ -124,6 +124,7 @@
     let localStream = null;
     let peerId = null;
     let inCall = false;
+    let searching = false;
 
     const localVideo = document.getElementById('local');
     const remoteVideo = document.getElementById('remote');
@@ -218,6 +219,7 @@
     socket.on('matched', async ({ partnerId, initiator }) => {
       peerId = partnerId;
       inCall = true;
+      searching = false;
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       pc = createPeerConnection();
@@ -231,6 +233,7 @@
     socket.on('offer', async ({ from, sdp }) => {
       peerId = from;
       inCall = true;
+      searching = false;
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       pc = createPeerConnection();
@@ -258,13 +261,29 @@
 
     socket.on('partner-disconnected', () => {
       cleanup();
+      searching = false;
       nextBtn.disabled = true;
-      setStatus('Subbatdosh chiqib ketdi.', '#ff6b6b');
+      startBtn.disabled = false;
+      startBtn.textContent = 'Boshlash';
+      setStatus('Subbatdosh chiqib ketdi. Qayta boshlash mumkin.', '#ff6b6b');
+    });
+
+    socket.on('disconnect', () => {
+      cleanup();
+      searching = false;
+      nextBtn.disabled = true;
+      startBtn.disabled = false;
+      setStatus('Server bilan aloqa uzildi. Qayta ulanmoqda...', '#ffb74d');
+    });
+
+    socket.on('connect', () => {
+      if (searching) socket.emit('start');
     });
 
     startBtn.addEventListener('click', async () => {
       try {
         await initLocalStream();
+        searching = true;
         socket.emit('start');
         startBtn.disabled = true;
         nextBtn.disabled = true;
@@ -278,6 +297,7 @@
     nextBtn.addEventListener('click', () => {
       socket.emit('next');
       cleanup();
+      searching = true;
       nextBtn.disabled = true;
       setStatus('Subbatdosh qidirilmoqda...');
     });
