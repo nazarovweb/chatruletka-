@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatRuletka — Bepul Random Video Chat</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #0f1117;
+      color: #fff;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      overflow: hidden;
+    }
+    h1 { padding: 16px; font-size: 22px; letter-spacing: 1px; }
+    h1 span { color: #4fc3f7; }
+    #videos {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      width: 100%;
+      max-width: 860px;
+      padding: 0 12px;
+    }
+    .video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .label {
+      position: absolute; top: 8px; left: 10px;
+      font-size: 12px; background: rgba(0,0,0,.55);
+      padding: 3px 8px; border-radius: 10px;
+    }
+    #status { margin-top: 14px; font-size: 15px; min-height: 22px; }
+    .controls { display: flex; gap: 10px; margin: 14px 0 20px; }
+    button {
+      padding: 12px 26px; font-size: 16px; border: none;
+      border-radius: 999px; cursor: pointer; font-weight: bold;
+    }
+    #startBtn { background: #4fc3f7; color: #0f1117; }
+    #nextBtn { background: #ff5252; color: #fff; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>Chat<span>Ruletka</span></h1>
+
+  <div id="videos">
+    <div class="video-wrap">
+      <video id="local" autoplay muted playsinline></video>
+      <div class="label">Siz</div>
+    </div>
+    <div class="video-wrap">
+      <video id="remote" autoplay playsinline></video>
+      <div class="label">Subbatdosh</div>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="controls">
+    <button id="startBtn">Boshlash</button>
+    <button id="nextBtn" disabled>Keyingisi</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    let pc = null;
+    let localStream = null;
+    let peerId = null;
+
+    const localVideo = document.getElementById('local');
+    const remoteVideo = document.getElementById('remote');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    function setStatus(text, color) {
+      statusEl.textContent = text;
+      statusEl.style.color = color || '#fff';
+    }
+
+    async function initLocalStream() {
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+      }
+    }
+
+    function createPeerConnection() {
+      const p = new RTCPeerConnection(rtcConfig);
+      localStream.getTracks().forEach((track) => p.addTrack(track, localStream));
+      remoteVideo.srcObject = new MediaStream();
+
+      p.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('ice-candidate', { to: peerId, candidate: e.candidate });
+        }
+      };
+      p.ontrack = (e) => {
+        if (remoteVideo.srcObject !== e.streams[0]) remoteVideo.srcObject = e.streams[0];
+      };
+      p.oniceconnectionstatechange = () => {
+        if (p.iceConnectionState === 'failed') {
+          setStatus('Ulanish muvaffaqiyatsiz. Keyingisiga o\'ting.', '#ffb74d');
+        }
+      };
+      return p;
+    }
+
+    async function cleanup() {
+      if (pc) {
+        pc.onicecandidate = null;
+        pc.ontrack = null;
+        pc.close();
+        pc = null;
+      }
+      remoteVideo.srcObject = null;
+      peerId = null;
+    }
+
+    socket.on('matched', async ({ partnerId, initiator }) => {
+      peerId = partnerId;
+      setStatus('Subbatdosh topildi!');
+      pc = createPeerConnection();
+      if (initiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('offer', { to: partnerId, sdp: pc.localDescription });
+      }
+    });
+
+    socket.on('offer', async ({ from, sdp }) => {
+      peerId = from;
+      setStatus('Subbatdosh topildi!');
+      pc = createPeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('answer', { to: from, sdp: pc.localDescription });
+    });
+
+    socket.on('answer', async ({ from, sdp }) => {
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    });
+
+    socket.on('ice-candidate', async ({ from, candidate }) => {
+      if (pc && candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {}
+      }
+    });
+
+    socket.on('partner-disconnected', () => {
+      cleanup();
+      nextBtn.disabled = true;
+      setStatus('Subbatdosh chiqib ketdi.', '#ff6b6b');
+    });
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        await initLocalStream();
+        socket.emit('start');
+        startBtn.disabled = true;
+        nextBtn.disabled = true;
+        setStatus('Subbatdosh qidirilmoqda...');
+      } catch (err) {
+        setStatus('Kamera/mikrofonga ruxsat berishingiz shart.', '#ff6b6b');
+        console.error(err);
+      }
+    });
+
+    nextBtn.addEventListener('click', () => {
+      socket.emit('next');
+      cleanup();
+      nextBtn.disabled = true;
+      setStatus('Subbatdosh qidirilmoqda...');
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (pc) pc.close();
+    });
+
+    setInterval(() => {
+      if (socket.connected) socket.emit('heartbeat');
+    }, 45000);
+  </script>
+</body>
+</html>
