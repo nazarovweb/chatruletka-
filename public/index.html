@@ -202,6 +202,41 @@
 
     .hide { display: none !important; }
 
+    #debugBtn {
+      position: fixed; left: 14px; bottom: 14px; z-index: 40;
+      background: rgba(255,255,255,.08); border: 1px solid var(--border); color: var(--muted);
+      font-size: 11px; font-weight: 700; letter-spacing: .5px;
+      padding: 5px 9px; border-radius: 8px; cursor: pointer; font-family: inherit;
+    }
+    #debugBtn:hover { color: var(--txt); background: rgba(255,255,255,.14); }
+    #debugPanel {
+      position: fixed; left: 12px; bottom: 46px; z-index: 41;
+      width: min(340px, calc(100vw - 24px)); max-height: 62vh;
+      background: rgba(8,12,20,.97); border: 1px solid var(--border);
+      border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.55);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .debug-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+      font-size: 12px; font-weight: 700; letter-spacing: .5px;
+    }
+    .debug-close { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; }
+    .debug-close:hover { color: var(--txt); }
+    #debugBody {
+      flex: 1; overflow: auto; padding: 10px 12px;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 11px; line-height: 1.55; color: #b9c2d4;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .debug-actions { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+    .debug-actions button {
+      flex: 1; background: rgba(255,255,255,.08); border: 1px solid var(--border);
+      color: var(--txt); border-radius: 8px; padding: 6px 8px; font-size: 11px;
+      cursor: pointer; font-family: inherit;
+    }
+    .debug-actions button:hover { background: rgba(255,255,255,.15); }
+
     @media (max-width: 720px) {
       #videos { grid-template-columns: 1fr; max-width: 500px; width: 100%; margin: 0 auto; }
       .video-wrap:nth-child(2) { order: -1; }
@@ -263,6 +298,15 @@
 
   <div id="chatToast"></div>
 
+  <button id="debugBtn" title="Diagnostika">DBG</button>
+  <div id="debugPanel" class="hide">
+    <div class="debug-head"><span>DEBUG</span><button class="debug-close" id="debugClose">&times;</button></div>
+    <div id="debugBody"></div>
+    <div class="debug-actions">
+      <button id="debugDownload">Yuklab olish (.json)</button>
+    </div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
@@ -307,6 +351,97 @@
     const chatToast = document.getElementById('chatToast');
     const chatBadge = document.getElementById('chatBadge');
     let chatUnread = 0;
+
+    let dbgCounters = { start: 0, stop: 0, next: 0, matched: 0, offerRecv: 0, answerRecv: 0, iceRecv: 0, iceSent: 0, iceBuffered: 0, chatRecv: 0, chatSend: 0 };
+    let dbgEvents = [];
+    let dbgStats = {};
+    const debugBtn = document.getElementById('debugBtn');
+    const debugPanelEl = document.getElementById('debugPanel');
+    const debugBody = document.getElementById('debugBody');
+    const debugClose = document.getElementById('debugClose');
+    const debugDownload = document.getElementById('debugDownload');
+
+    function dbgLog(tag, msg) {
+      const e = { t: Date.now(), tag: String(tag), msg: String(msg) };
+      dbgEvents.push(e);
+      if (dbgEvents.length > 300) dbgEvents.shift();
+      console.log('[' + new Date(e.t).toISOString().slice(11, 23) + ']', tag, msg);
+    }
+
+    window.addEventListener('error', (e) => dbgLog('err', e.message + ' @' + (e.filename || '') + ':' + (e.lineno || '?')));
+    window.addEventListener('unhandledrejection', (e) => dbgLog('err', 'reject: ' + ((e.reason && e.reason.message) || e.reason)));
+
+    debugBtn.addEventListener('click', () => {
+      const open = debugPanelEl.classList.toggle('hide');
+      if (open) refreshDebug();
+    });
+    debugClose.addEventListener('click', () => debugPanelEl.classList.add('hide'));
+    debugDownload.addEventListener('click', () => {
+      const data = JSON.stringify({ ua: navigator.userAgent, counters: dbgCounters, events: dbgEvents, stats: dbgStats }, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'chatruletka-debug.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    async function refreshDebug() {
+      const L = [];
+      L.push('Browser: ' + navigator.userAgent.slice(0, 90));
+      L.push('WebRTC: ' + (typeof RTCPeerConnection !== 'undefined' ? 'ok' : 'YOQ') + ' | gUM: ' + (navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'ok' : 'YOQ'));
+      L.push('ICE: ' + iceServers.map((s) => String(s.urls)).join(' | '));
+      L.push('pc=' + (pc ? pc.connectionState : 'null') + ' ice=' + (pc ? pc.iceConnectionState : '-'));
+      L.push('inCall=' + inCall + ' searching=' + searching + ' peer=' + (peerId || '-'));
+      L.push('C: start=' + dbgCounters.start + ' stop=' + dbgCounters.stop + ' next=' + dbgCounters.next + ' matched=' + dbgCounters.matched);
+      L.push('C: offerRecv=' + dbgCounters.offerRecv + ' ansRecv=' + dbgCounters.answerRecv + ' iceRecv=' + dbgCounters.iceRecv + ' iceSent=' + dbgCounters.iceSent + ' buffered=' + dbgCounters.iceBuffered + ' chatR=' + dbgCounters.chatRecv + ' chatS=' + dbgCounters.chatSend);
+      if (pc) {
+        try {
+          const st = await pc.getStats();
+          let rtt = null, jit = null, loss = null, pkts = null, fr = null;
+          const loc = {}, rem = {};
+          let sel = null;
+          st.forEach((s) => {
+            if (s.type === 'local-candidate') loc[s.id] = s;
+            if (s.type === 'remote-candidate') rem[s.id] = s;
+            if (s.type === 'candidate-pair' && !sel && (s.nominated || s.state === 'succeeded')) sel = s;
+            if (s.type === 'remote-inbound-rtp' && s.kind === 'video') {
+              if (typeof s.roundTripTime === 'number') rtt = s.roundTripTime;
+              if (typeof s.jitter === 'number') jit = s.jitter;
+            }
+            if (s.type === 'inbound-rtp' && s.kind === 'video') {
+              pkts = s.packetsReceived; loss = s.packetsLost;
+              fr = (s.framesReceived != null) ? s.framesReceived : s.framesDecoded;
+            }
+          });
+          let pairRelay = false;
+          if (sel) {
+            const a = loc[sel.localCandidateId], b = rem[sel.remoteCandidateId];
+            const ta = a ? a.candidateType : '?', tb = b ? b.candidateType : '?';
+            L.push('Pair: ' + ta + ' <-> ' + tb + ' (' + (sel.state || '?') + ')');
+            if (a) L.push('Local: ' + a.protocol + ':' + a.port + '(' + a.ip + ')');
+            if (b) L.push('Remote: ' + b.protocol + ':' + b.port + '(' + (b.ip || '') + ')');
+            L.push('Active: ' + sel.bytesReceived + 'B rcv / ' + sel.bytesSent + 'B snt');
+            if (ta === 'relay' || tb === 'relay') pairRelay = true;
+          }
+          if (rtt !== null) L.push('RTT=' + (rtt * 1000).toFixed(0) + 'ms jitter=' + (jit * 1000).toFixed(0) + 'ms');
+          if (pkts != null) L.push('video pkts=' + pkts + ' lost=' + (loss || 0) + ' frames=' + fr);
+          dbgStats = { rttMs: rtt != null ? Math.round(rtt * 1000) : null, jitterMs: jit != null ? Math.round(jit * 1000) : null, lost: loss || 0, pkts: pkts, frames: fr, pairRelay: pairRelay };
+          L.push(pairRelay ? '== MAQSAD = RELAY (TURN orqali) ==' : '== MAQSAD: to\'g\'ridan-to\'g\'ri/host ==');
+        } catch (e) {
+          L.push('stats err: ' + e.message);
+        }
+      }
+      L.push('--- Log ---');
+      const last = dbgEvents.slice(-30);
+      last.forEach((e) => L.push(new Date(e.t).toISOString().slice(11, 19) + ' ' + e.tag + ': ' + e.msg));
+      if (!last.length) L.push('(hali xodisalar yo\'q)');
+      debugBody.textContent = L.join('\n');
+    }
+
+    setInterval(() => {
+      if (!debugPanelEl.classList.contains('hide')) refreshDebug();
+    }, 1500);
 
     const defaultIceServers = [
       { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
@@ -355,6 +490,8 @@
     }
 
     stopBtn.addEventListener('click', () => {
+      dbgCounters.stop += 1;
+      dbgLog('ui', 'stop');
       socket.emit('stop');
       cleanup();
       searching = false;
@@ -440,6 +577,7 @@
 
       p.onicecandidate = (e) => {
         if (e.candidate) {
+          dbgCounters.iceSent += 1;
           socket.emit('ice-candidate', { to: peerId, candidate: e.candidate });
         }
       };
@@ -462,6 +600,7 @@
       };
       p.oniceconnectionstatechange = () => {
         const st = p.iceConnectionState;
+        dbgLog('pc', 'ice=' + st);
         if (st === 'connected' || st === 'completed') {
           startVideoWatchdog();
           startQualityLoop();
@@ -546,6 +685,7 @@
     }
 
     function autoNext(delay) {
+      dbgLog('ui', 'autoNext in ' + delay + 'ms');
       setTimeout(() => {
         if (!inCall) return;
         socket.emit('next');
@@ -618,6 +758,8 @@
       const text = chatInput.value.trim();
       if (!text) return;
       socket.emit('chat-message', { text });
+      dbgCounters.chatSend += 1;
+      dbgLog('chat', 'send: ' + text.slice(0, 40));
       appendChat(text, true);
       chatInput.value = '';
       chatInput.focus();
@@ -674,6 +816,8 @@
       peerId = partnerId;
       inCall = true;
       searching = false;
+      dbgCounters.matched += 1;
+      dbgLog('sig', 'matched initiator=' + initiator);
       setCallingUI(true);
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
@@ -686,6 +830,7 @@
         await waitGatheringComplete(p, 2500);
         if (peerId !== partnerId) return;
         socket.emit('offer', { to: partnerId, sdp: p.localDescription });
+        dbgLog('sig', 'offer sent (gather=' + p.iceGatheringState + ')');
       }
     });
 
@@ -693,6 +838,8 @@
       peerId = from;
       inCall = true;
       searching = false;
+      dbgCounters.offerRecv += 1;
+      dbgLog('sig', 'offer recv');
       setCallingUI(true);
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
@@ -706,27 +853,34 @@
       await waitGatheringComplete(p, 2500);
       if (peerId !== from) return;
       socket.emit('answer', { to: from, sdp: p.localDescription });
+      dbgLog('sig', 'answer sent (gather=' + p.iceGatheringState + ')');
     });
 
     socket.on('answer', async ({ from, sdp }) => {
+      dbgCounters.answerRecv += 1;
+      dbgLog('sig', 'answer recv');
       if (pc) {
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
         await flushIce();
       }
     });
 
-    socket.on('ice-candidate', async ({ from, candidate }) => {
-      if (!pc || !candidate) return;
-      if (!pc.remoteDescription) {
+    socket.on('ice-candidate', ({ from, candidate }) => {
+      if (!candidate) return;
+      if (from && peerId && from !== peerId) return;
+      dbgCounters.iceRecv += 1;
+      if (!pc || !pc.remoteDescription) {
         pendingIce.push(candidate);
+        dbgCounters.iceBuffered += 1;
         return;
       }
       try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        pc.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {}
     });
 
     socket.on('chat-message', ({ text }) => {
+      dbgCounters.chatRecv += 1;
       appendChat(text, false);
       playDing();
       if (chatPanel.classList.contains('open')) {
@@ -740,6 +894,7 @@
     });
 
     socket.on('partner-disconnected', () => {
+      dbgLog('sig', 'partner-disconnected');
       cleanup();
       searching = false;
       nextBtn.disabled = true;
@@ -749,6 +904,7 @@
     });
 
     socket.on('disconnect', () => {
+      dbgLog('sig', 'disconnected');
       cleanup();
       searching = false;
       nextBtn.disabled = true;
@@ -758,12 +914,15 @@
     });
 
     socket.on('connect', () => {
+      dbgLog('sig', 'connected (socket.io)');
       if (searching) socket.emit('start');
     });
 
     startBtn.addEventListener('click', async () => {
       try {
         await initLocalStream();
+        dbgCounters.start += 1;
+        dbgLog('ui', 'start');
         searching = true;
         socket.emit('start');
         setCallingUI(false);
@@ -777,6 +936,8 @@
     });
 
     nextBtn.addEventListener('click', () => {
+      dbgCounters.next += 1;
+      dbgLog('ui', 'next');
       socket.emit('next');
       cleanup();
       searching = true;
