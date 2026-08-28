@@ -153,11 +153,13 @@
 
     let pc = null;
     let localStream = null;
+    let remoteStream = null;
     let peerId = null;
     let inCall = false;
     let searching = false;
     let watchdog = null;
     let qualityTimer = null;
+    let videoOk = false;
     let currentMax = 700;
 
     (() => {
@@ -256,7 +258,9 @@
     function createPeerConnection() {
       const p = new RTCPeerConnection(rtcConfig);
       localStream.getTracks().forEach((track) => p.addTrack(track, localStream));
-      remoteVideo.srcObject = new MediaStream();
+      videoOk = false;
+      remoteStream = new MediaStream();
+      remoteVideo.srcObject = remoteStream;
 
       p.onicecandidate = (e) => {
         if (e.candidate) {
@@ -264,22 +268,25 @@
         }
       };
       p.ontrack = (e) => {
-        if (remoteVideo.srcObject !== e.streams[0]) remoteVideo.srcObject = e.streams[0];
-        e.track.addEventListener('mute', () => {
-          if (e.track.kind === 'video' && inCall) {
-            setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
+        const s = e.streams && e.streams[0];
+        const tracks = s ? s.getTracks() : [e.track];
+        tracks.forEach((t) => {
+          if (!remoteStream.getTracks().includes(t)) remoteStream.addTrack(t);
+          if (t.kind === 'video') {
+            t.addEventListener('mute', () => {
+              if (inCall) setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
+            });
+            t.addEventListener('unmute', () => {
+              if (inCall) checkVideoHealth();
+            });
           }
         });
-        e.track.addEventListener('unmute', () => {
-          if (e.track.kind === 'video' && inCall) {
-            setStatus('Subbatdosh ulandi.', '#fff');
-          }
-        });
+        if (remoteVideo.srcObject !== remoteStream) remoteVideo.srcObject = remoteStream;
+        remoteVideo.play().catch(() => {});
       };
       p.oniceconnectionstatechange = () => {
         const st = p.iceConnectionState;
         if (st === 'connected' || st === 'completed') {
-          setStatus('Subbatdosh ulandi.', '#6bd98e');
           startVideoWatchdog();
           startQualityLoop();
         } else if (st === 'failed') {
@@ -297,15 +304,44 @@
       return p;
     }
 
+    async function checkVideoHealth() {
+      if (!inCall || !pc) return;
+      const vt = remoteStream ? remoteStream.getVideoTracks()[0] : null;
+      let frames = null;
+      try {
+        const stats = await pc.getStats();
+        stats.forEach((s) => {
+          if (s.type === 'inbound-rtp' && s.kind === 'video') {
+            const f = s.framesReceived != null ? s.framesReceived : s.framesDecoded;
+            if (typeof f === 'number' && frames === null) frames = f;
+          }
+        });
+      } catch (e) {}
+
+      if (frames !== null && frames > 0) {
+        if (!videoOk) {
+          videoOk = true;
+          setStatus('Subbatdosh ulandi.', '#6bd98e');
+        }
+        return;
+      }
+      if (vt && vt.muted) {
+        setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
+        watchdog = setTimeout(checkVideoHealth, 5000);
+        return;
+      }
+      if (frames === null) {
+        watchdog = setTimeout(checkVideoHealth, 3000);
+        return;
+      }
+      videoOk = false;
+      setStatus('Ulangan, lekin video kelmayapti. Keyingisiga o\'tilmoqda...', '#ffb74d');
+      autoNext(800);
+    }
+
     function startVideoWatchdog() {
       clearTimeout(watchdog);
-      watchdog = setTimeout(() => {
-        if (!inCall) return;
-        if (remoteVideo.readyState < 2) {
-          setStatus('Video tushmayapti. Keyingisiga o\'tilmoqda...', '#ffb74d');
-          autoNext(1500);
-        }
-      }, 6000);
+      watchdog = setTimeout(checkVideoHealth, 1500);
     }
 
     function watchdogTimeout(fn, ms) {
@@ -325,13 +361,13 @@
     }
 
     remoteVideo.addEventListener('playing', () => {
-      clearTimeout(watchdog);
-      if (inCall) setStatus('Subbatdosh ulandi.', '#6bd98e');
+      if (inCall) checkVideoHealth();
     });
 
     async function cleanup() {
       clearTimeout(watchdog);
       clearTimeout(qualityTimer);
+      videoOk = false;
       if (pc) {
         pc.onicecandidate = null;
         pc.ontrack = null;
