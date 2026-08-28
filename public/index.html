@@ -3,7 +3,38 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ChatRuletka — Bepul Random Video Chat</title>
+  <title>ChatRuletka — Bepul Random Video Chat Online</title>
+  <meta name="description" content="ChatRuletka — bepul random video chat. Onlayn ro'yxatdan o'tishsiz begonalar bilan video suhbat qiling. Free random video chat with strangers. Chatroulette va Omegle o'rniga bepul alternativ.">
+  <meta name="keywords" content="chatruletka, free video chat, random video chat, chatroulette, omegle, online video chat, video chat with strangers, bepul video chat">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="ChatRuletka">
+  <link rel="canonical" href="https://chatruletka.onrender.com/">
+
+  <!-- Open Graph (Telegram, Facebook, VK) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ChatRuletka">
+  <meta property="og:title" content="ChatRuletka — Bepul Random Video Chat">
+  <meta property="og:description" content="Register-Free random video chat. Strangers bilan bepul video suhbat — ChatRuletka. Free random video chat with strangers online.">
+  <meta property="og:url" content="https://chatruletka.onrender.com/">
+  <meta property="og:locale" content="uz_UZ">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="ChatRuletka — Bepul Random Video Chat">
+  <meta name="twitter:description" content="Register-Free random video chat with strangers. Bepul random video chat onlayn.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "ChatRuletka",
+    "url": "https://chatruletka.onrender.com/",
+    "applicationCategory": "CommunicationApplication",
+    "operatingSystem": "Web",
+    "description": "Free random video chat with strangers. Bepul random video chat online.",
+    "inLanguage": ["uz", "en", "ru"]
+  }
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -125,6 +156,7 @@
     let peerId = null;
     let inCall = false;
     let searching = false;
+    let watchdog = null;
 
     const localVideo = document.getElementById('local');
     const remoteVideo = document.getElementById('remote');
@@ -169,19 +201,75 @@
       };
       p.ontrack = (e) => {
         if (remoteVideo.srcObject !== e.streams[0]) remoteVideo.srcObject = e.streams[0];
+        e.track.addEventListener('mute', () => {
+          if (e.track.kind === 'video' && inCall) {
+            setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
+          }
+        });
+        e.track.addEventListener('unmute', () => {
+          if (e.track.kind === 'video' && inCall) {
+            setStatus('Subbatdosh ulandi.', '#fff');
+          }
+        });
       };
       p.oniceconnectionstatechange = () => {
-        if (p.iceConnectionState === 'failed') {
-          setStatus('Ulanish muvaffaqiyatsiz. Keyingisiga o\'ting.', '#ffb74d');
+        const st = p.iceConnectionState;
+        if (st === 'connected' || st === 'completed') {
+          setStatus('Subbatdosh ulandi.', '#6bd98e');
+          startVideoWatchdog();
+        } else if (st === 'failed') {
+          setStatus('Ulanish muvaffaqiyatsiz. Keyingisiga o\'tildi.', '#ffb74d');
+          autoNext(2500);
+        } else if (st === 'disconnected') {
+          watchdogTimeout(() => {
+            if (pc && pc.iceConnectionState === 'disconnected' && inCall) {
+              setStatus('Subbatdosh yo\'qolib ketdi. Keyingisiga o\'tildi.', '#ffb74d');
+              autoNext(1000);
+            }
+          }, 6000);
         }
       };
       return p;
     }
 
+    function startVideoWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (!inCall) return;
+        if (remoteVideo.readyState < 2) {
+          setStatus('Video tushmayapti. Keyingisiga o\'tilmoqda...', '#ffb74d');
+          autoNext(1500);
+        }
+      }, 6000);
+    }
+
+    function watchdogTimeout(fn, ms) {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(fn, ms);
+    }
+
+    function autoNext(delay) {
+      setTimeout(() => {
+        if (!inCall) return;
+        socket.emit('next');
+        cleanup();
+        searching = true;
+        nextBtn.disabled = true;
+        setStatus('Subbatdosh qidirilmoqda...');
+      }, delay);
+    }
+
+    remoteVideo.addEventListener('playing', () => {
+      clearTimeout(watchdog);
+      if (inCall) setStatus('Subbatdosh ulandi.', '#6bd98e');
+    });
+
     async function cleanup() {
+      clearTimeout(watchdog);
       if (pc) {
         pc.onicecandidate = null;
         pc.ontrack = null;
+        pc.oniceconnectionstatechange = null;
         pc.close();
         pc = null;
       }
