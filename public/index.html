@@ -113,6 +113,21 @@
       border-radius: 999px; padding: 9px 14px; outline: none; font-size: 14px;
     }
     #chatSend { background: #4fc3f7; color: #0f1117; border: none; border-radius: 999px; padding: 9px 16px; font-weight: bold; cursor: pointer; }
+    .chat-badge {
+      position: absolute; top: -5px; right: -5px;
+      background: #ff5252; color: #fff; font-size: 11px; font-weight: bold;
+      min-width: 20px; height: 20px; border-radius: 999px;
+      display: flex; align-items: center; justify-content: center; padding: 0 5px;
+    }
+    #chatToast {
+      position: fixed; top: 14px; left: 50%;
+      transform: translateX(-50%) translateY(-140%);
+      background: rgba(22,25,37,.96); border: 1px solid #4fc3f7; color: #fff;
+      padding: 11px 18px; border-radius: 12px; font-size: 14px; z-index: 25;
+      max-width: 84%; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+      cursor: pointer; transition: transform .25s ease; text-align: center; word-break: break-word;
+    }
+    #chatToast.show { transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -136,7 +151,9 @@
     <button id="nextBtn" disabled>Keyingisi</button>
   </div>
 
-  <button id="chatToggle">Chat</button>
+  <button id="chatToggle">Chat<span id="chatBadge" class="chat-badge" hidden></span></button>
+
+  <div id="chatToast"></div>
 
   <div id="chatPanel">
     <div class="chat-head"><span>Chat</span><button class="chat-close" id="chatClose">&times;</button></div>
@@ -161,6 +178,7 @@
     let qualityTimer = null;
     let videoOk = false;
     let currentMax = 700;
+    let pendingIce = [];
 
     (() => {
       const conn = navigator.connection;
@@ -182,13 +200,37 @@
     const chatLog = document.getElementById('chatLog');
     const chatInput = document.getElementById('chatInput');
     const chatSend = document.getElementById('chatSend');
+    const chatToast = document.getElementById('chatToast');
+    const chatBadge = document.getElementById('chatBadge');
+    let chatUnread = 0;
 
-    const rtcConfig = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    };
+    const defaultIceServers = [
+      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'],
+        username: 'openrelay',
+        credential: 'openrelay'
+      }
+    ];
+    let iceServers = defaultIceServers;
+
+    fetch('/ice')
+      .then((r) => r.json())
+      .then((extra) => {
+        if (Array.isArray(extra) && extra.length) {
+          iceServers = defaultIceServers.concat(extra);
+        }
+      })
+      .catch(() => {});
+
+    function rtcConfig() {
+      return {
+        iceServers,
+        bundlePolicy: 'max-bundle',
+        iceCandidatePoolSize: 4
+      };
+    }
 
     function setStatus(text, color) {
       statusEl.textContent = text;
@@ -256,7 +298,7 @@
     }
 
     function createPeerConnection() {
-      const p = new RTCPeerConnection(rtcConfig);
+      const p = new RTCPeerConnection(rtcConfig());
       localStream.getTracks().forEach((track) => p.addTrack(track, localStream));
       videoOk = false;
       remoteStream = new MediaStream();
@@ -360,6 +402,29 @@
       }, delay);
     }
 
+    function waitGatheringComplete(p, timeoutMs) {
+      return new Promise((resolve) => {
+        if (p.iceGatheringState === 'complete') return resolve();
+        const timer = setTimeout(resolve, timeoutMs);
+        p.addEventListener('icegatheringstatechange', () => {
+          if (p.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
+    }
+
+    async function flushIce() {
+      if (!pendingIce.length) return;
+      const c = pendingIce.splice(0);
+      for (const cand of c) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } catch (e) {}
+      }
+    }
+
     remoteVideo.addEventListener('playing', () => {
       if (inCall) checkVideoHealth();
     });
@@ -368,6 +433,9 @@
       clearTimeout(watchdog);
       clearTimeout(qualityTimer);
       videoOk = false;
+      pendingIce.length = 0;
+      clearUnread();
+      chatToast.classList.remove('show');
       if (pc) {
         pc.onicecandidate = null;
         pc.ontrack = null;
@@ -399,8 +467,48 @@
       chatInput.focus();
     }
 
-    chatToggle.addEventListener('click', () => chatPanel.classList.toggle('open'));
+    function clearUnread() {
+      chatUnread = 0;
+      chatBadge.hidden = true;
+    }
+
+    function showToast(text) {
+      chatToast.textContent = text;
+      chatToast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => chatToast.classList.remove('show'), 4000);
+    }
+
+    function playDing() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ac = playDing.ac || (playDing.ac = new Ctx());
+        if (ac.state === 'suspended') ac.resume();
+        const o = ac.createOscillator();
+        const g = ac.createGain();
+        o.type = 'sine';
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.08, ac.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.3);
+        o.connect(g);
+        g.connect(ac.destination);
+        o.start();
+        o.stop(ac.currentTime + 0.3);
+      } catch (e) {}
+    }
+
+    chatToggle.addEventListener('click', () => {
+      const willOpen = !chatPanel.classList.contains('open');
+      chatPanel.classList.toggle('open');
+      if (willOpen) clearUnread();
+    });
     chatClose.addEventListener('click', () => chatPanel.classList.remove('open'));
+    chatToast.addEventListener('click', () => {
+      chatPanel.classList.add('open');
+      clearUnread();
+      chatToast.classList.remove('show');
+    });
     chatSend.addEventListener('click', sendChat);
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendChat();
@@ -412,12 +520,15 @@
       searching = false;
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
-      pc = createPeerConnection();
-      adaptQuality(pc, currentMax);
+      const p = createPeerConnection();
+      pc = p;
+      adaptQuality(p, currentMax);
       if (initiator) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit('offer', { to: partnerId, sdp: pc.localDescription });
+        const offer = await p.createOffer();
+        await p.setLocalDescription(offer);
+        await waitGatheringComplete(p, 2500);
+        if (peerId !== partnerId) return;
+        socket.emit('offer', { to: partnerId, sdp: p.localDescription });
       }
     });
 
@@ -427,28 +538,47 @@
       searching = false;
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
-      pc = createPeerConnection();
-      adaptQuality(pc, currentMax);
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit('answer', { to: from, sdp: pc.localDescription });
+      const p = createPeerConnection();
+      pc = p;
+      adaptQuality(p, currentMax);
+      await p.setRemoteDescription(new RTCSessionDescription(sdp));
+      await flushIce();
+      const answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      await waitGatheringComplete(p, 2500);
+      if (peerId !== from) return;
+      socket.emit('answer', { to: from, sdp: p.localDescription });
     });
 
     socket.on('answer', async ({ from, sdp }) => {
-      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        await flushIce();
+      }
     });
 
     socket.on('ice-candidate', async ({ from, candidate }) => {
-      if (pc && candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {}
+      if (!pc || !candidate) return;
+      if (!pc.remoteDescription) {
+        pendingIce.push(candidate);
+        return;
       }
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {}
     });
 
     socket.on('chat-message', ({ text }) => {
       appendChat(text, false);
+      playDing();
+      if (chatPanel.classList.contains('open')) {
+        clearUnread();
+      } else {
+        chatUnread += 1;
+        chatBadge.textContent = chatUnread > 99 ? '99+' : chatUnread;
+        chatBadge.hidden = false;
+        showToast('Yangi xabar: ' + text);
+      }
     });
 
     socket.on('partner-disconnected', () => {

@@ -8,6 +8,18 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
+app.get('/ice', (req, res) => {
+  const list = [];
+  const turn = process.env.TURN_URL;
+  if (turn) {
+    const item = { urls: turn };
+    if (process.env.TURN_USERNAME) item.username = process.env.TURN_USERNAME;
+    if (process.env.TURN_PASSWORD) item.credential = process.env.TURN_PASSWORD;
+    list.push(item);
+  }
+  res.json(list);
+});
+
 const queue = [];
 const partnerOf = new Map();
 
