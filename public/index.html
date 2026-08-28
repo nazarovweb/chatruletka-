@@ -179,6 +179,7 @@
     let videoOk = false;
     let currentMax = 700;
     let pendingIce = [];
+    let lowMediaStreak = 0;
 
     (() => {
       const conn = navigator.connection;
@@ -349,41 +350,61 @@
     async function checkVideoHealth() {
       if (!inCall || !pc) return;
       const vt = remoteStream ? remoteStream.getVideoTracks()[0] : null;
+      let pkts = null;
       let frames = null;
+      let hasEntry = false;
       try {
         const stats = await pc.getStats();
         stats.forEach((s) => {
           if (s.type === 'inbound-rtp' && s.kind === 'video') {
-            const f = s.framesReceived != null ? s.framesReceived : s.framesDecoded;
-            if (typeof f === 'number' && frames === null) frames = f;
+            hasEntry = true;
+            if (pkts === null && s.packetsReceived != null) pkts = s.packetsReceived;
+            if (frames === null) {
+              const f = s.framesReceived != null ? s.framesReceived : s.framesDecoded;
+              if (typeof f === 'number') frames = f;
+            }
           }
         });
       } catch (e) {}
 
+      if (vt && vt.muted) {
+        lowMediaStreak = 0;
+        setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
+        watchdog = setTimeout(checkVideoHealth, 3000);
+        return;
+      }
+
       if (frames !== null && frames > 0) {
+        lowMediaStreak = 0;
         if (!videoOk) {
           videoOk = true;
           setStatus('Subbatdosh ulandi.', '#6bd98e');
         }
-        return;
-      }
-      if (vt && vt.muted) {
-        setStatus('Subbatdosh kamerasi o\'chirilgan.', '#ffb74d');
-        watchdog = setTimeout(checkVideoHealth, 5000);
-        return;
-      }
-      if (frames === null) {
         watchdog = setTimeout(checkVideoHealth, 3000);
         return;
       }
+
+      if (hasEntry && pkts !== null && pkts > 0) {
+        lowMediaStreak = 0;
+        watchdog = setTimeout(checkVideoHealth, 2500);
+        return;
+      }
+
+      lowMediaStreak += 1;
+      if (lowMediaStreak < 5) {
+        watchdog = setTimeout(checkVideoHealth, 2500);
+        return;
+      }
+
+      lowMediaStreak = 0;
       videoOk = false;
-      setStatus('Ulangan, lekin video kelmayapti. Keyingisiga o\'tilmoqda...', '#ffb74d');
+      setStatus('Video signal umuman kelmayapti. Keyingisiga o\'tilmoqda...', '#ffb74d');
       autoNext(800);
     }
 
     function startVideoWatchdog() {
       clearTimeout(watchdog);
-      watchdog = setTimeout(checkVideoHealth, 1500);
+      watchdog = setTimeout(checkVideoHealth, 2000);
     }
 
     function watchdogTimeout(fn, ms) {
@@ -433,6 +454,7 @@
       clearTimeout(watchdog);
       clearTimeout(qualityTimer);
       videoOk = false;
+      lowMediaStreak = 0;
       pendingIce.length = 0;
       clearUnread();
       chatToast.classList.remove('show');
