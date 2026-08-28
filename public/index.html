@@ -26,6 +26,13 @@
       max-width: 860px;
       padding: 0 12px;
     }
+    @media (max-width: 720px) {
+      #videos {
+        grid-template-columns: 1fr;
+        max-width: 460px;
+      }
+      .video-wrap:nth-child(2) { order: -1; }
+    }
     .video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; }
     video { width: 100%; height: 100%; object-fit: cover; }
     .label {
@@ -132,6 +139,7 @@
 
     socket.on('matched', async ({ partnerId, initiator }) => {
       peerId = partnerId;
+      nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       pc = createPeerConnection();
       if (initiator) {
@@ -143,6 +151,7 @@
 
     socket.on('offer', async ({ from, sdp }) => {
       peerId = from;
+      nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       pc = createPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
