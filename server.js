@@ -74,6 +74,13 @@ io.on('connection', (socket) => {
 
   socket.on('heartbeat', () => {});
 
+  socket.on('chat-message', (data) => {
+    const partnerId = partnerOf.get(socket.id);
+    if (partnerId && data && typeof data.text === 'string' && data.text.trim()) {
+      io.to(partnerId).emit('chat-message', { text: data.text.slice(0, 500) });
+    }
+  });
+
   socket.on('disconnect', () => {
     removeFromQueue(socket.id);
     leavePair(socket.id);
