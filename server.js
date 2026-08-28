@@ -66,6 +66,11 @@ io.on('connection', (socket) => {
     tryMatch();
   });
 
+  socket.on('stop', () => {
+    leavePair(socket.id);
+    removeFromQueue(socket.id);
+  });
+
   socket.on('offer', (data) => {
     if (partnerOf.get(socket.id) === data.to) {
       io.to(data.to).emit('offer', { from: socket.id, sdp: data.sdp });
@@ -103,3 +108,7 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`ChatRuletka running on http://localhost:${PORT}`);
 });
+
+setInterval(() => {
+  io.emit('online', io.sockets.sockets.size);
+}, 8000);

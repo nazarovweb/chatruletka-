@@ -210,38 +210,58 @@
   </style>
 </head>
 <body>
-  <h1>Chat<span>Ruletka</span></h1>
+  <header class="topbar">
+    <div class="logo">Chat<span>Ruletka</span></div>
+    <div class="online"><span class="dot"></span><span id="online">0</span> online</div>
+  </header>
 
-  <div id="videos">
-    <div class="video-wrap">
-      <video id="local" autoplay muted playsinline></video>
-      <div class="label">Siz</div>
+  <main>
+    <div id="videos">
+      <div class="video-wrap">
+        <video id="local" autoplay muted playsinline></video>
+        <div class="label">Siz</div>
+      </div>
+      <div class="video-wrap">
+        <video id="remote" autoplay playsinline></video>
+        <div class="label">Subbatdosh</div>
+      </div>
     </div>
-    <div class="video-wrap">
-      <video id="remote" autoplay playsinline></video>
-      <div class="label">Subbatdosh</div>
+
+    <div id="status"></div>
+
+    <div class="controls">
+      <button id="startBtn" class="btn">Boshlash</button>
+      <button id="stopBtn" class="btn hide">Stop</button>
+      <button id="nextBtn" class="btn hide" disabled>Keyingisi</button>
+      <button id="micBtn" class="icon-btn" title="Mikrofon">
+        <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+      </button>
+      <button id="camBtn" class="icon-btn" title="Kamera">
+        <svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+      </button>
     </div>
-  </div>
 
-  <div id="status"></div>
-
-  <div class="controls">
-    <button id="startBtn">Boshlash</button>
-    <button id="nextBtn" disabled>Keyingisi</button>
-  </div>
-
-  <button id="chatToggle">Chat<span id="chatBadge" class="chat-badge" hidden></span></button>
+    <div id="chatPanel" class="open">
+      <div class="chat-head">
+        <span class="chat-head-title">Chat</span>
+        <span class="chat-head-actions">
+          <button id="chatToggle" title="Chatni ochish/yopish">
+            Chat<span id="chatBadge" class="chat-badge" hidden></span>
+          </button>
+          <button class="chat-close" id="chatClose">&times;</button>
+        </span>
+      </div>
+      <div class="chat-body">
+        <div id="chatLog"></div>
+        <div class="chat-foot">
+          <input id="chatInput" type="text" placeholder="Xabar yozing..." maxlength="500" autocomplete="off">
+          <button id="chatSend">Yuborish</button>
+        </div>
+      </div>
+    </div>
+  </main>
 
   <div id="chatToast"></div>
-
-  <div id="chatPanel">
-    <div class="chat-head"><span>Chat</span><button class="chat-close" id="chatClose">&times;</button></div>
-    <div id="chatLog"></div>
-    <div class="chat-foot">
-      <input id="chatInput" type="text" placeholder="Xabar yozing..." maxlength="500" autocomplete="off">
-      <button id="chatSend">Yuborish</button>
-    </div>
-  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
@@ -273,7 +293,11 @@
     const remoteVideo = document.getElementById('remote');
     const statusEl = document.getElementById('status');
     const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
     const nextBtn = document.getElementById('nextBtn');
+    const micBtn = document.getElementById('micBtn');
+    const camBtn = document.getElementById('camBtn');
+    const onlineEl = document.getElementById('online');
     const chatToggle = document.getElementById('chatToggle');
     const chatPanel = document.getElementById('chatPanel');
     const chatClose = document.getElementById('chatClose');
@@ -316,6 +340,36 @@
       statusEl.textContent = text;
       statusEl.style.color = color || '#fff';
     }
+
+    function setCallingUI(calling) {
+      startBtn.classList.toggle('hide', !!calling);
+      stopBtn.classList.toggle('hide', !calling);
+      nextBtn.classList.toggle('hide', !calling);
+    }
+
+    function toggleTrack(kind, btn) {
+      const t = localStream && localStream.getTracks().find((x) => x.kind === kind);
+      if (!t) return;
+      t.enabled = !t.enabled;
+      btn.classList.toggle('off', !t.enabled);
+    }
+
+    stopBtn.addEventListener('click', () => {
+      socket.emit('stop');
+      cleanup();
+      searching = false;
+      nextBtn.disabled = true;
+      startBtn.disabled = false;
+      setCallingUI(false);
+      setStatus('Suhbat to\'xtatildi. Qayta boshlash mumkin.', '#9aa3b5');
+    });
+
+    micBtn.addEventListener('click', () => toggleTrack('audio', micBtn));
+    camBtn.addEventListener('click', () => toggleTrack('video', camBtn));
+
+    socket.on('online', (n) => {
+      onlineEl.textContent = typeof n === 'number' ? n : 0;
+    });
 
     async function initLocalStream() {
       if (!localStream) {
@@ -498,6 +552,7 @@
         cleanup();
         searching = true;
         nextBtn.disabled = true;
+        setCallingUI(false);
         setStatus('Subbatdosh qidirilmoqda...');
       }, delay);
     }
@@ -619,6 +674,7 @@
       peerId = partnerId;
       inCall = true;
       searching = false;
+      setCallingUI(true);
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       const p = createPeerConnection();
@@ -637,6 +693,7 @@
       peerId = from;
       inCall = true;
       searching = false;
+      setCallingUI(true);
       nextBtn.disabled = false;
       setStatus('Subbatdosh topildi!');
       const p = createPeerConnection();
@@ -687,7 +744,7 @@
       searching = false;
       nextBtn.disabled = true;
       startBtn.disabled = false;
-      startBtn.textContent = 'Boshlash';
+      setCallingUI(false);
       setStatus('Subbatdosh chiqib ketdi. Qayta boshlash mumkin.', '#ff6b6b');
     });
 
@@ -696,6 +753,7 @@
       searching = false;
       nextBtn.disabled = true;
       startBtn.disabled = false;
+      setCallingUI(false);
       setStatus('Server bilan aloqa uzildi. Qayta ulanmoqda...', '#ffb74d');
     });
 
@@ -708,6 +766,7 @@
         await initLocalStream();
         searching = true;
         socket.emit('start');
+        setCallingUI(false);
         startBtn.disabled = true;
         nextBtn.disabled = true;
         setStatus('Subbatdosh qidirilmoqda...');
@@ -722,6 +781,7 @@
       cleanup();
       searching = true;
       nextBtn.disabled = true;
+      setCallingUI(false);
       setStatus('Subbatdosh qidirilmoqda...');
     });
 
